@@ -257,3 +257,110 @@ Content-Type: text/plain
 レスポンスを受信したクライアントは、`Access-Control-Allow-Credentials: true`が設定されているかどうかを確認する。設定されていなかった場合、レスポンスは無視される。また、`Access-Control-Allow-Origin`は明確にオリジンを指定せねばならず、ワイルドカード`*`が設定された場合、リクエストは失敗する。
 
 ## モックの実装
+
+まず、クロスサイトのリクエストには`localhost:8081`からのリクエストしか受け付けないサーバーを実装する。
+CORSに則ったHTTPヘッダを設定し、プリフライトリクエストが来た場合の扱いを定義したミドルウェアを実装。
+
+```typescript
+import { Request, Response, NextFunction } from "express";
+
+const allowCrossDomain = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void => {
+  res.header("Access-Control-Allow-Origin", "http://localhost:8081");
+  res.header("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type");
+
+  if (req.method === "OPTIONS") {
+    res.sendStatus(200);
+  } else {
+    next();
+  }
+};
+
+export default allowCrossDomain;
+```
+
+ルーティングを定義したミドルウェアは特に工夫なく。
+
+```typescript
+import express, { Request, Response } from "express";
+
+const router = express.Router();
+
+router.post("/", (_req: Request, res: Response) => {
+  try {
+    res.status(200).json({ message: "success!!" });
+  } catch {
+    res.status(400).json({ message: "Sorry, something went wrong." });
+  }
+});
+
+export default router;
+```
+
+これらのミドルウェアをapp.useする。
+
+```typescript
+import express from "express";
+import allowCrossDomain from "./allowCrossOrigin";
+import router from "./router";
+import staticPageServer from "./staticPageServer";
+
+const app = express();
+app.use(allowCrossDomain);
+app.use(router);
+app.listen(8080);
+
+const staticPage = express();
+staticPage.use(staticPageServer);
+staticPage.listen(8081);
+```
+
+staticPageは、このサーバーにリクエストを送るモック。
+
+```typescript
+import express from "express";
+
+const staticPageServer = express.static("public");
+
+export default staticPageServer;
+```
+
+express.staticしてディレクトリ（ここでは`public`）を指定すると、指定したディレクトリ配下の静的コンテンツが配信できる。`public/index.html`を作成する。
+
+```html
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CORSについて理解する</title>
+  </head>
+  <body>
+    <p>CORSについて理解する</p>
+    <button onclick="sendSimpleRequest()">シンプルなリクエストを送信する</button>
+    <button onclick="sendPreflightRequest()">プリフライトリクエストを送信する</button>
+    <script>
+      const url = "https://494e29cf9cb7.ngrok.io"
+      const sendSimpleRequest = () => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url);
+        xhr.send();
+      };
+
+      const sendPreflightRequest = () => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url);
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.send();
+      }
+    </script>
+  </body>
+</html>
+```
+
+`url`には、ngrokで生成したURLを設定する。ngrokを使えば、簡単に別オリジンを再現できる。
+localhost:8081で静的ページを表示すると、ボタンが2つ表示される。表示されたボタンをそれぞれクリックしてみて、開発者ツールのNetworkタブなどをみれば、シンプルなリクエストとプリフライトリクエストを使ったリクエストをそれぞれ確認できる。
